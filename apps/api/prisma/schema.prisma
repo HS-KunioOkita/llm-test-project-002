@@ -1,0 +1,177 @@
+// Prisma schema — MVP
+//
+// 設計判断:
+//   * ID は VARCHAR(32)。schema.md は CHAR(26) を示していたが、
+//     同ドキュメントの例 (`ord_...`, `cus_...`) のプレフィックス付き ID は
+//     26 文字に収まらないため VARCHAR(32) に拡張した (docs/decisions.md 参照)。
+//   * enum 列は設計方針に従い文字列 + アプリ層 Zod 検証で運用。CHECK 制約は
+//     初回マイグレーション後に raw SQL で追加する余地を残す。
+//   * セッションは DB テーブル sessions に格納し、Cookie には不透明 ID のみ保存。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String    @id @db.VarChar(32)
+  loginId          String    @unique @map("login_id") @db.VarChar(64)
+  displayName      String    @map("display_name") @db.VarChar(128)
+  email            String?   @db.VarChar(256)
+  passwordHash     String    @map("password_hash") @db.VarChar(256)
+  role             String    @db.VarChar(16)
+  active           Boolean   @default(true)
+  failedLoginCount Int       @default(0) @map("failed_login_count")
+  lockedUntil      DateTime? @map("locked_until") @db.Timestamptz
+  lastLoginAt      DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  ordersAssigned Order[]   @relation("OrderAssignee")
+  ordersApproved Order[]   @relation("OrderApprover")
+  sessions       Session[]
+
+  @@index([role])
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(32)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Customer {
+  id          String   @id @db.VarChar(32)
+  code        String   @unique @db.VarChar(32)
+  name        String   @db.VarChar(256)
+  contactName String?  @map("contact_name") @db.VarChar(128)
+  email       String?  @db.VarChar(256)
+  phone       String?  @db.VarChar(32)
+  postalCode  String?  @map("postal_code") @db.VarChar(16)
+  address     String?  @db.VarChar(512)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  orders Order[]
+
+  @@index([name])
+  @@index([active])
+  @@map("customers")
+}
+
+model Product {
+  id        String   @id @db.VarChar(32)
+  code      String   @unique @db.VarChar(32)
+  name      String   @db.VarChar(256)
+  unit      String   @db.VarChar(16)
+  unitPrice Int      @map("unit_price")
+  taxRate   Decimal  @default(0.100) @map("tax_rate") @db.Decimal(4, 3)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  orderLines OrderLine[]
+
+  @@index([name])
+  @@index([active])
+  @@map("products")
+}
+
+model Order {
+  id              String    @id @db.VarChar(32)
+  orderNumber     String    @unique @map("order_number") @db.VarChar(32)
+  customerId      String    @map("customer_id") @db.VarChar(32)
+  assigneeUserId  String    @map("assignee_user_id") @db.VarChar(32)
+  approverUserId  String?   @map("approver_user_id") @db.VarChar(32)
+  status          String    @default("draft") @db.VarChar(16)
+  shipmentStatus  String    @default("pending") @map("shipment_status") @db.VarChar(16)
+  orderedAt       DateTime  @default(now()) @map("ordered_at") @db.Timestamptz
+  approvedAt      DateTime? @map("approved_at") @db.Timestamptz
+  cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz
+  shippedAt       DateTime? @map("shipped_at") @db.Timestamptz
+  cancelReason    String?   @map("cancel_reason") @db.VarChar(256)
+  note            String?   @db.Text
+  totalAmount     Int       @default(0) @map("total_amount")
+  totalTaxAmount  Int       @default(0) @map("total_tax_amount")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  customer Customer    @relation(fields: [customerId], references: [id])
+  assignee User        @relation("OrderAssignee", fields: [assigneeUserId], references: [id])
+  approver User?       @relation("OrderApprover", fields: [approverUserId], references: [id])
+  items    OrderLine[]
+
+  @@index([customerId, orderedAt(sort: Desc)])
+  @@index([status, orderedAt(sort: Desc)])
+  @@index([shipmentStatus, orderedAt(sort: Desc)])
+  @@index([assigneeUserId, orderedAt(sort: Desc)])
+  @@index([orderedAt(sort: Desc)])
+  @@map("orders")
+}
+
+model OrderLine {
+  id        String   @id @db.VarChar(32)
+  orderId   String   @map("order_id") @db.VarChar(32)
+  productId String   @map("product_id") @db.VarChar(32)
+  lineNo    Int      @map("line_no")
+  quantity  Int
+  unitPrice Int      @map("unit_price")
+  taxRate   Decimal  @map("tax_rate") @db.Decimal(4, 3)
+  amount    Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, lineNo])
+  @@index([productId])
+  @@index([orderId])
+  @@map("order_lines")
+}
+
+model AuditLog {
+  id           String   @id @db.VarChar(32)
+  occurredAt   DateTime @default(now()) @map("occurred_at") @db.Timestamptz
+  actorUserId  String?  @map("actor_user_id") @db.VarChar(32)
+  actorRole    String?  @map("actor_role") @db.VarChar(16)
+  requestId    String?  @map("request_id") @db.VarChar(64)
+  ipAddress    String?  @map("ip_address") @db.VarChar(64)
+  userAgent    String?  @map("user_agent") @db.VarChar(512)
+  resourceType String   @map("resource_type") @db.VarChar(32)
+  resourceId   String?  @map("resource_id") @db.VarChar(64)
+  action       String   @db.VarChar(32)
+  beforeJson   Json?    @map("before_json")
+  afterJson    Json?    @map("after_json")
+  metadata     Json?
+
+  @@index([occurredAt(sort: Desc)])
+  @@index([resourceType, resourceId, occurredAt(sort: Desc)])
+  @@index([actorUserId, occurredAt(sort: Desc)])
+  @@index([action, occurredAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model LoginAttempt {
+  id          String   @id @db.VarChar(32)
+  loginId     String   @map("login_id") @db.VarChar(64)
+  ipAddress   String?  @map("ip_address") @db.VarChar(64)
+  success     Boolean
+  attemptedAt DateTime @default(now()) @map("attempted_at") @db.Timestamptz
+
+  @@index([loginId, attemptedAt(sort: Desc)])
+  @@index([attemptedAt(sort: Desc)])
+  @@map("login_attempts")
+}

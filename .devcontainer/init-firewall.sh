@@ -30,6 +30,11 @@ for domain in \
     "statsig.com" \
     "sentry.io" \
     "registry.npmjs.org" \
+    "binaries.prisma.sh" \
+    "download.docker.com" \
+    "registry-1.docker.io" \
+    "auth.docker.io" \
+    "production.cloudflare.docker.com" \
     "api.github.com" \
     "github.com" \
     "codeload.github.com" \
